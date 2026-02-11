@@ -97,7 +97,7 @@ async def log_message(update, context):
             logger.info(f"Message saved to database for chat {chat_id} ({chat_title})")
         except Exception as e:
             logger.error(f"Failed to log message to database: {e}")
-            await update.message.reply_text("哎呀，儲存訊息時出錯！請稍後再試。")
+            # Do not send an error reply to Telegram; only log the error for backend monitoring.
         finally:
             if conn:
                 db_pool.putconn(conn)
