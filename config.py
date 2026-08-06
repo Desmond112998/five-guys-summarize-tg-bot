@@ -15,6 +15,8 @@ SERPER_API_KEY = config("SERPER_API_KEY")
 
 # Telegram Bot Token
 TOKEN = config("BOT_TOKEN")
+# Optional override for local/dev mocking (default Telegram Bot API root)
+TELEGRAM_API_BASE = config("TELEGRAM_API_BASE", default="https://api.telegram.org/bot")
 
 # Model and API settings
 MODEL = config("MODEL")

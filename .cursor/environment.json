@@ -1,0 +1,20 @@
+{
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "install": "pip3 install --break-system-packages -r requirements.txt && bash .cursor/setup_db.sh",
+  "start": "bash .cursor/setup_db.sh",
+  "terminals": [
+    {
+      "name": "mock-telegram",
+      "command": "python3 scripts/mock_telegram_api.py --port 8089",
+      "description": "Local Telegram Bot API mock for offline demos"
+    },
+    {
+      "name": "bot",
+      "command": "TELEGRAM_API_BASE=${TELEGRAM_API_BASE:-http://127.0.0.1:8089/bot} python3 main.py",
+      "description": "Telegram bot (defaults to local mock; set real BOT_TOKEN and TELEGRAM_API_BASE=https://api.telegram.org/bot for production)"
+    }
+  ]
+}

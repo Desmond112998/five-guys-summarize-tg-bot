@@ -1,6 +1,6 @@
 from telegram.ext import Application, MessageHandler, filters, CommandHandler
 from compliment import compliment_user
-from config import TOKEN, logger, AI_GENERATE_BASE_PROMPT
+from config import TOKEN, TELEGRAM_API_BASE, logger, AI_GENERATE_BASE_PROMPT
 from database import (
     DatabasePool,
     init_db,
@@ -23,7 +23,7 @@ import pytz
 from datetime import datetime, timedelta
 from ai_chat import handle_chat
 
-application = Application.builder().token(TOKEN).build()
+application = Application.builder().token(TOKEN).base_url(TELEGRAM_API_BASE).build()
 
 
 async def donate(update, context):
