@@ -1,0 +1,15 @@
+{
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "install": "pip3 install --break-system-packages -r requirements.txt && bash .cursor/setup_db.sh",
+  "start": "bash .cursor/setup_db.sh",
+  "terminals": [
+    {
+      "name": "bot",
+      "command": "python3 main.py",
+      "description": "Telegram bot (requires BOT_TOKEN, DATABASE_URL, MODEL, API_KEY, BASE_URL, SERPER_API_KEY secrets)"
+    }
+  ]
+}
