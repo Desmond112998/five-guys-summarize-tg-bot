@@ -25,7 +25,7 @@ from ai import get_ai_apology, get_ai_countdown, get_ai_answer_with_tools
 import pytz
 from datetime import datetime, timedelta
 from ai_chat import handle_chat
-from jev_gate import allow_user_text
+from jev_gate import allow_user_turn, previous_assistant_from_history
 
 application = Application.builder().token(TOKEN).build()
 
@@ -207,14 +207,6 @@ async def answer(update, context):
 
     target_message = " ".join(context.args)
 
-    if not allow_user_text(target_message):
-        await message.reply_text(GATE_REJECT_REPLY)
-        return
-
-    hk_tz = pytz.timezone("Asia/Hong_Kong")
-    current_date = datetime.now(hk_tz).strftime("%Y年%m月%d日")
-    enhanced_message = f"[當前日期：{current_date}]\n用戶問題：{target_message}"
-
     user = message.from_user
     user_name = user.first_name if user.first_name else "唔知邊條粉蛋"
     if user.last_name:
@@ -234,7 +226,7 @@ async def answer(update, context):
         chat_title=chat_title,
         user_id=user.id,
         user_name=user_name,
-        text=enhanced_message,
+        text=target_message,
         telegram_message_id=message.message_id,
         reply_to_message_id=reply_to_id,
         thread_id=thread_id,
@@ -245,6 +237,12 @@ async def answer(update, context):
     history = get_thread_messages(chat_id, thread_id)
     if history is None:
         await message.reply_text("哎呀，讀取對話紀錄時出錯！🤯")
+        return
+
+    if not allow_user_turn(
+        target_message, previous_assistant_from_history(history)
+    ):
+        await message.reply_text(GATE_REJECT_REPLY)
         return
 
     waiting_message = await message.reply_text("諗緊點答你… 🤔")

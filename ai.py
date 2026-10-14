@@ -12,8 +12,10 @@ from config import (
     LOVE_SYSTEM_PROMPT,
     AI_ANSWER_SYSTEM_PROMPT,
     SERPER_API_KEY,
+    system_prompt_with_hk_time,
     logger,
 )
+from jev_gate import allow_user_text
 
 # --- CLIENT INITIALIZATION ---
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
@@ -237,13 +239,19 @@ def get_ai_answer_with_tools(
                 f"Starting get_ai_answer_with_tools with {len(history_messages)} history message(s)"
             )
             messages = [
-                {"role": "system", "content": AI_ANSWER_SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": system_prompt_with_hk_time(AI_ANSWER_SYSTEM_PROMPT),
+                },
                 *history_messages,
             ]
         else:
             logger.info(f"Starting get_ai_answer_with_tools for prompt: {user_prompt}")
             messages = [
-                {"role": "system", "content": AI_ANSWER_SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": system_prompt_with_hk_time(AI_ANSWER_SYSTEM_PROMPT),
+                },
                 {"role": "user", "content": user_prompt},
             ]
 
@@ -284,8 +292,13 @@ def get_ai_answer_with_tools(
                         query = function_args.get("query")
                         time_range = function_args.get("time_range", "qdr:y")
 
-                        # Call the search function
-                        search_results = search_with_serper(query, time_range)
+                        if not query or not allow_user_text(str(query)):
+                            search_results = (
+                                "Search refused by safety gate. "
+                                "Answer without this search."
+                            )
+                        else:
+                            search_results = search_with_serper(query, time_range)
 
                         # Add function result to messages
                         messages.append(
@@ -389,7 +402,10 @@ def get_ai_chat_response(system_prompt: str, history_messages: list) -> str:
     """
     try:
         messages = [
-            {"role": "system", "content": system_prompt},
+            {
+                "role": "system",
+                "content": system_prompt_with_hk_time(system_prompt),
+            },
             *history_messages,
         ]
         response = client.chat.completions.create(
