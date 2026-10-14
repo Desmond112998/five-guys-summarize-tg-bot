@@ -1,11 +1,14 @@
 from telegram.ext import Application, MessageHandler, filters, CommandHandler
 from compliment import compliment_user
-from config import TOKEN, logger, AI_GENERATE_BASE_PROMPT
+from config import GATE_REJECT_REPLY, TOKEN, logger
 from database import (
     DatabasePool,
+    get_thread_messages,
     init_db,
-    log_message,
-)  # Import DatabasePool instead of init_db_pool
+    log_bot_reply,
+    log_thread_user_message,
+    resolve_thread_id,
+)
 from summarize import (
     summarize_day,
     summarize_morning,
@@ -22,6 +25,7 @@ from ai import get_ai_apology, get_ai_countdown, get_ai_answer_with_tools
 import pytz
 from datetime import datetime, timedelta
 from ai_chat import handle_chat
+from jev_gate import allow_user_text
 
 application = Application.builder().token(TOKEN).build()
 
@@ -197,30 +201,70 @@ async def answer(update, context):
         f"Starting answer command in chat {chat_id} with command: {message.text}"
     )
 
-    # Check if context args are provided
     if not context.args:
         await message.reply_text("請提供問題，例如：/ask 今日香港天氣點？")
         return
 
-    # Join context args to form the target message
     target_message = " ".join(context.args)
 
-    # Add current date context to help AI with time-aware reasoning
+    if not allow_user_text(target_message):
+        await message.reply_text(GATE_REJECT_REPLY)
+        return
+
     hk_tz = pytz.timezone("Asia/Hong_Kong")
     current_date = datetime.now(hk_tz).strftime("%Y年%m月%d日")
-
-    # Enhanced prompt with date context
     enhanced_message = f"[當前日期：{current_date}]\n用戶問題：{target_message}"
 
-    waiting_message = await message.reply_text(f"諗緊點答你… 🤔")
+    user = message.from_user
+    user_name = user.first_name if user.first_name else "唔知邊條粉蛋"
+    if user.last_name:
+        user_name += " " + user.last_name
+    chat_title = message.chat.title if message.chat.title else "Private Chat"
+    reply_to_id = (
+        message.reply_to_message.message_id if message.reply_to_message else None
+    )
 
-    # Use AI with tool calling capability
-    # AI will automatically decide if it needs to search for information
-    answer = get_ai_answer_with_tools(enhanced_message)
-    logger.info(f"Generated answer for chat {chat_id}: {answer[:100]}...")
+    thread_id = resolve_thread_id(chat_id, user.id, reply_to_id)
+    if not thread_id:
+        await message.reply_text("哎呀，讀取對話紀錄時出錯！🤯")
+        return
 
-    if answer and answer != "系統想方加(出錯)，好對唔住":
-        await waiting_message.edit_text(answer)
+    if not log_thread_user_message(
+        chat_id=chat_id,
+        chat_title=chat_title,
+        user_id=user.id,
+        user_name=user_name,
+        text=enhanced_message,
+        telegram_message_id=message.message_id,
+        reply_to_message_id=reply_to_id,
+        thread_id=thread_id,
+    ):
+        await message.reply_text("哎呀，讀取對話紀錄時出錯！🤯")
+        return
+
+    history = get_thread_messages(chat_id, thread_id)
+    if history is None:
+        await message.reply_text("哎呀，讀取對話紀錄時出錯！🤯")
+        return
+
+    waiting_message = await message.reply_text("諗緊點答你… 🤔")
+
+    answer_text = get_ai_answer_with_tools(history_messages=history)
+    logger.info(f"Generated answer for chat {chat_id}: {answer_text[:100]}...")
+
+    if answer_text and answer_text != "系統想方加(出錯)，好對唔住":
+        await waiting_message.edit_text(answer_text)
+        bot = await context.bot.get_me()
+        await log_bot_reply(
+            chat_id=chat_id,
+            chat_title=chat_title,
+            text=answer_text,
+            bot_id=bot.id,
+            bot_name=bot.name,
+            telegram_message_id=waiting_message.message_id,
+            thread_id=thread_id,
+            reply_to_message_id=message.message_id,
+        )
     else:
         await waiting_message.edit_text("無氣答，唔好打我🙏")
 

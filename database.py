@@ -1,7 +1,10 @@
+import uuid
+from datetime import datetime, timedelta, timezone
+
 import psycopg2
 from psycopg2 import pool
-from config import DB_URL, logger, HK_TIMEZONE
-from datetime import datetime
+
+from config import DB_URL, HK_TIMEZONE, MAX_THREAD_TURNS, THREAD_IDLE_MINUTES, logger
 
 
 class DatabasePool:
@@ -46,8 +49,24 @@ def init_db():
                 chat_title TEXT
             )
         """)
-        
-        # Create table for tracking daily AI chat usage
+
+        cursor.execute("""
+            ALTER TABLE messages
+            ADD COLUMN IF NOT EXISTS telegram_message_id BIGINT,
+            ADD COLUMN IF NOT EXISTS reply_to_message_id BIGINT,
+            ADD COLUMN IF NOT EXISTS role TEXT,
+            ADD COLUMN IF NOT EXISTS thread_id TEXT
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_chat_telegram_message_id
+            ON messages (chat_id, telegram_message_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_chat_thread_timestamp
+            ON messages (chat_id, thread_id, timestamp)
+        """)
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS daily_ai_usage (
                 id SERIAL PRIMARY KEY,
@@ -69,20 +88,36 @@ def init_db():
             db_pool.putconn(conn)
 
 
+def _utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 async def log_message(update, context):
     if update.message and update.message.text:
         chat_id = update.message.chat_id
         user = update.message.from_user
         message = update.message.text
         timestamp = update.message.date
+        if timestamp and timestamp.tzinfo is not None:
+            timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
         user_id = user.id
-        chat_title = update.message.chat.title if update.message.chat.title else "Private Chat"
+        chat_title = (
+            update.message.chat.title if update.message.chat.title else "Private Chat"
+        )
+        telegram_message_id = update.message.message_id
+        reply_to_message_id = (
+            update.message.reply_to_message.message_id
+            if update.message.reply_to_message
+            else None
+        )
 
-        user_name = user.first_name if user.first_name else '唔知邊條粉蛋'
+        user_name = user.first_name if user.first_name else "唔知邊條粉蛋"
         if user.last_name:
             user_name += " " + user.last_name
 
-        logger.info(f"Received message in chat {chat_id} ({chat_title}) from {user_name} (ID: {user_id}): {message}")
+        logger.info(
+            f"Received message in chat {chat_id} ({chat_title}) from {user_name} (ID: {user_id}): {message}"
+        )
 
         db_pool = DatabasePool.get_pool()
         conn = None
@@ -90,33 +125,257 @@ async def log_message(update, context):
             conn = db_pool.getconn()
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_name, user_id, text, timestamp, chat_title) VALUES (%s, %s, %s, %s, %s, %s)",
-                (chat_id, user_name, user_id, message, timestamp, chat_title)
+                """
+                INSERT INTO messages (
+                    chat_id, user_name, user_id, text, timestamp, chat_title,
+                    telegram_message_id, reply_to_message_id, role, thread_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    chat_id,
+                    user_name,
+                    user_id,
+                    message,
+                    timestamp,
+                    chat_title,
+                    telegram_message_id,
+                    reply_to_message_id,
+                    "user",
+                    None,
+                ),
             )
             conn.commit()
             logger.info(f"Message saved to database for chat {chat_id} ({chat_title})")
         except Exception as e:
             logger.error(f"Failed to log message to database: {e}")
-            # Do not send an error reply to Telegram; only log the error for backend monitoring.
         finally:
             if conn:
                 db_pool.putconn(conn)
 
 
-async def log_bot_reply(chat_id: int, chat_title: str, text: str, bot_id: int, bot_name: str):
-    """Logs the bot's own replies."""
-    timestamp = datetime.now(HK_TIMEZONE)
+def resolve_thread_id(
+    chat_id: int, user_id: int, reply_to_message_id: int | None
+) -> str | None:
+    """
+    Resolve conversation thread for this chat/user.
+    Reply to a bot message continues that thread; else continue idle window or open new.
+    Returns None on DB error.
+    """
     db_pool = DatabasePool.get_pool()
     conn = None
     try:
         conn = db_pool.getconn()
         cursor = conn.cursor()
 
-        sql = "INSERT INTO messages (chat_id, user_name, user_id, text, timestamp, chat_title) VALUES (%s, %s, %s, %s, %s, %s)"
-        params = (chat_id, bot_name, bot_id, text, timestamp, chat_title)
+        if reply_to_message_id is not None:
+            cursor.execute(
+                """
+                SELECT thread_id FROM messages
+                WHERE chat_id = %s
+                  AND telegram_message_id = %s
+                  AND thread_id IS NOT NULL
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (chat_id, reply_to_message_id),
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                return row[0]
 
-        # Log the SQL query to be executed (Bot Reply)
-        logger.info(f"Executing SQL (Bot Reply): {cursor.mogrify(sql, params).decode('utf-8')}")
+        idle_start = _utc_now() - timedelta(minutes=THREAD_IDLE_MINUTES)
+        cursor.execute(
+            """
+            SELECT thread_id FROM messages
+            WHERE chat_id = %s
+              AND user_id = %s
+              AND role = 'user'
+              AND thread_id IS NOT NULL
+              AND timestamp >= %s
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (chat_id, user_id, idle_start),
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            return row[0]
+
+        return str(uuid.uuid4())
+    except Exception as e:
+        logger.error(f"Failed to resolve thread_id: {e}")
+        return None
+    finally:
+        if conn:
+            db_pool.putconn(conn)
+
+
+def attach_thread_to_message(
+    chat_id: int,
+    telegram_message_id: int,
+    thread_id: str,
+    text: str | None = None,
+) -> bool:
+    db_pool = DatabasePool.get_pool()
+    conn = None
+    try:
+        conn = db_pool.getconn()
+        cursor = conn.cursor()
+        if text is not None:
+            cursor.execute(
+                """
+                UPDATE messages
+                SET thread_id = %s, text = %s
+                WHERE chat_id = %s AND telegram_message_id = %s
+                """,
+                (thread_id, text, chat_id, telegram_message_id),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE messages
+                SET thread_id = %s
+                WHERE chat_id = %s AND telegram_message_id = %s
+                """,
+                (thread_id, chat_id, telegram_message_id),
+            )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Failed to attach thread_id: {e}")
+        return False
+    finally:
+        if conn:
+            db_pool.putconn(conn)
+
+
+def get_thread_messages(
+    chat_id: int, thread_id: str, limit: int = MAX_THREAD_TURNS
+) -> list[dict] | None:
+    """
+    Load recent thread turns as OpenAI-style {role, content} dicts.
+    Returns None on DB error; empty list if no rows.
+    """
+    db_pool = DatabasePool.get_pool()
+    conn = None
+    try:
+        conn = db_pool.getconn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT role, text FROM (
+                SELECT role, text, timestamp, id
+                FROM messages
+                WHERE chat_id = %s
+                  AND thread_id = %s
+                  AND role IN ('user', 'assistant')
+                ORDER BY timestamp DESC, id DESC
+                LIMIT %s
+            ) recent
+            ORDER BY timestamp ASC, id ASC
+            """,
+            (chat_id, thread_id, limit),
+        )
+        rows = cursor.fetchall()
+        messages = []
+        for role, text in rows:
+            if role in ("user", "assistant") and text:
+                messages.append({"role": role, "content": text})
+        return messages
+    except Exception as e:
+        logger.error(f"Failed to load thread messages: {e}")
+        return None
+    finally:
+        if conn:
+            db_pool.putconn(conn)
+
+
+def log_thread_user_message(
+    chat_id: int,
+    chat_title: str,
+    user_id: int,
+    user_name: str,
+    text: str,
+    telegram_message_id: int,
+    reply_to_message_id: int | None,
+    thread_id: str,
+) -> bool:
+    """Insert a user turn already bound to a thread (e.g. /ask)."""
+    db_pool = DatabasePool.get_pool()
+    conn = None
+    try:
+        conn = db_pool.getconn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO messages (
+                chat_id, user_name, user_id, text, timestamp, chat_title,
+                telegram_message_id, reply_to_message_id, role, thread_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                chat_id,
+                user_name,
+                user_id,
+                text,
+                _utc_now(),
+                chat_title,
+                telegram_message_id,
+                reply_to_message_id,
+                "user",
+                thread_id,
+            ),
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to log thread user message: {e}")
+        return False
+    finally:
+        if conn:
+            db_pool.putconn(conn)
+
+
+async def log_bot_reply(
+    chat_id: int,
+    chat_title: str,
+    text: str,
+    bot_id: int,
+    bot_name: str,
+    telegram_message_id: int | None = None,
+    thread_id: str | None = None,
+    reply_to_message_id: int | None = None,
+):
+    """Logs the bot's own replies."""
+    timestamp = _utc_now()
+    db_pool = DatabasePool.get_pool()
+    conn = None
+    try:
+        conn = db_pool.getconn()
+        cursor = conn.cursor()
+
+        sql = """
+            INSERT INTO messages (
+                chat_id, user_name, user_id, text, timestamp, chat_title,
+                telegram_message_id, reply_to_message_id, role, thread_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        params = (
+            chat_id,
+            bot_name,
+            bot_id,
+            text,
+            timestamp,
+            chat_title,
+            telegram_message_id,
+            reply_to_message_id,
+            "assistant",
+            thread_id,
+        )
+
+        logger.info(
+            f"Executing SQL (Bot Reply): {cursor.mogrify(sql, params).decode('utf-8')}"
+        )
 
         cursor.execute(sql, params)
         conn.commit()
@@ -138,27 +397,29 @@ def check_daily_usage_limit(chat_id: int, max_usage: int = 20) -> tuple[bool, in
     try:
         conn = db_pool.getconn()
         cursor = conn.cursor()
-        
-        # Get today's date in Hong Kong timezone
+
         today = datetime.now(HK_TIMEZONE).date()
-        
-        # Check current usage for today
-        cursor.execute("""
-            SELECT usage_count FROM daily_ai_usage 
+
+        cursor.execute(
+            """
+            SELECT usage_count FROM daily_ai_usage
             WHERE chat_id = %s AND usage_date = %s
-        """, (chat_id, today))
-        
+            """,
+            (chat_id, today),
+        )
+
         result = cursor.fetchone()
         current_usage = result[0] if result else 0
-        
+
         can_use = current_usage < max_usage
-        logger.info(f"Chat {chat_id} daily usage: {current_usage}/{max_usage}, can_use: {can_use}")
-        
+        logger.info(
+            f"Chat {chat_id} daily usage: {current_usage}/{max_usage}, can_use: {can_use}"
+        )
+
         return can_use, current_usage
-        
+
     except Exception as e:
         logger.error(f"Failed to check daily usage limit: {e}")
-        # If there's an error, allow usage to prevent blocking
         return True, 0
     finally:
         if conn:
@@ -175,24 +436,25 @@ def increment_daily_usage(chat_id: int) -> bool:
     try:
         conn = db_pool.getconn()
         cursor = conn.cursor()
-        
-        # Get today's date in Hong Kong timezone
+
         today = datetime.now(HK_TIMEZONE).date()
-        
-        # Use UPSERT to increment usage count
-        cursor.execute("""
-            INSERT INTO daily_ai_usage (chat_id, usage_date, usage_count) 
+
+        cursor.execute(
+            """
+            INSERT INTO daily_ai_usage (chat_id, usage_date, usage_count)
             VALUES (%s, %s, 1)
-            ON CONFLICT (chat_id, usage_date) 
-            DO UPDATE SET 
+            ON CONFLICT (chat_id, usage_date)
+            DO UPDATE SET
                 usage_count = daily_ai_usage.usage_count + 1,
                 updated_at = CURRENT_TIMESTAMP
-        """, (chat_id, today))
-        
+            """,
+            (chat_id, today),
+        )
+
         conn.commit()
         logger.info(f"Incremented daily usage for chat {chat_id}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to increment daily usage: {e}")
         return False

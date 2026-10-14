@@ -144,6 +144,11 @@ CREATE TABLE messages (
 | `MODEL` | AI model name | Yes |
 | `API_KEY` | AI service API key | Yes |
 | `BASE_URL` | AI service base URL | Yes |
+| `SERPER_API_KEY` | Serper search API key | Yes |
+| `TYPESAFE_API_KEY` | TypeSafe/Jev API key for the input gate | Yes |
+| `JEV_REJECT_THRESHOLD` | Reject when Jev noul ≥ this value (default `0.8`) | No |
+| `THREAD_IDLE_MINUTES` | Continue mention threads within this window (default `30`) | No |
+| `MAX_THREAD_TURNS` | Max turns loaded per thread (default `20`) | No |
 
 ### Bot Permissions
 

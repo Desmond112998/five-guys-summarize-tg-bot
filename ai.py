@@ -216,23 +216,36 @@ SEARCH_TOOL = {
 
 
 # --- TEXT-ONLY FUNCTIONS (SYNCHRONOUS) ---
-def get_ai_answer_with_tools(user_prompt: str, max_iterations: int = 3) -> str:
+def get_ai_answer_with_tools(
+    user_prompt: str = None,
+    max_iterations: int = 3,
+    history_messages: list = None,
+) -> str:
     """
     Generates a text-based answer from the AI with tool calling capability.
     AI can decide whether to search for information using Serper.
     Supports iterative tool calling - AI can search, analyze results, and search again if needed.
 
     Args:
-        user_prompt: The user's question
+        user_prompt: The user's question (legacy single-turn)
         max_iterations: Maximum number of tool calling iterations (default: 3)
+        history_messages: Optional prior turns as {role, content}; current user turn last
     """
     try:
-        logger.info(f"Starting get_ai_answer_with_tools for prompt: {user_prompt}")
-
-        messages = [
-            {"role": "system", "content": AI_ANSWER_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
+        if history_messages:
+            logger.info(
+                f"Starting get_ai_answer_with_tools with {len(history_messages)} history message(s)"
+            )
+            messages = [
+                {"role": "system", "content": AI_ANSWER_SYSTEM_PROMPT},
+                *history_messages,
+            ]
+        else:
+            logger.info(f"Starting get_ai_answer_with_tools for prompt: {user_prompt}")
+            messages = [
+                {"role": "system", "content": AI_ANSWER_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
 
         iteration = 0
         while iteration < max_iterations:
@@ -367,6 +380,26 @@ def get_ai_summary(user_prompt: str, system_prompt="") -> str:
         return response.choices[0].message.content
     except Exception as e:
         print(f"Error in get_ai_summary: {e}")
+        return "系統想方加(出錯)，好對唔住"
+
+
+def get_ai_chat_response(system_prompt: str, history_messages: list) -> str:
+    """
+    Open chat reply using an explicit conversation history (user/assistant turns).
+    """
+    try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *history_messages,
+        ]
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            stream=False,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Error in get_ai_chat_response: {e}")
         return "系統想方加(出錯)，好對唔住"
 
 
