@@ -738,8 +738,11 @@ Ching 我明白嘅😮‍💨 有時返工真係會覺得好撚悶，特別係�
 # Database URL
 DB_URL = os.getenv("DATABASE_URL", config("DATABASE_URL"))
 
-# TypeSafe / Jev input gate (fail closed when unset or call fails)
-TYPESAFE_API_KEY = config("TYPESAFE_API_KEY", default="")
+# Jev input gate via OpenRouter (fail closed when key missing or call fails)
+# Prefer OPENROUTER_API_KEY; fall back to API_KEY (same OpenRouter key as chat).
+JEV_API_KEY = config("OPENROUTER_API_KEY", default="") or config("API_KEY", default="")
+JEV_BASE_URL = config("JEV_BASE_URL", default="https://openrouter.ai/api")
+JEV_MODEL = config("JEV_MODEL", default="jev-1.13")
 JEV_REJECT_THRESHOLD = float(config("JEV_REJECT_THRESHOLD", default="0.8"))
 THREAD_IDLE_MINUTES = int(config("THREAD_IDLE_MINUTES", default="30"))
 MAX_THREAD_TURNS = int(config("MAX_THREAD_TURNS", default="20"))

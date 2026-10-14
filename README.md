@@ -145,7 +145,9 @@ CREATE TABLE messages (
 | `API_KEY` | AI service API key | Yes |
 | `BASE_URL` | AI service base URL | Yes |
 | `SERPER_API_KEY` | Serper search API key | Yes |
-| `TYPESAFE_API_KEY` | TypeSafe/Jev API key for the input gate | Yes |
+| `OPENROUTER_API_KEY` | Optional OpenRouter key for Jev; if unset, reuses `API_KEY` | No |
+| `JEV_BASE_URL` | TypeSafe SDK base URL (default `https://openrouter.ai/api`) | No |
+| `JEV_MODEL` | Jev model id (default `jev-1.13` → OpenRouter `typesafe/jev-1.13`) | No |
 | `JEV_REJECT_THRESHOLD` | Reject when Jev noul ≥ this value (default `0.8`) | No |
 | `THREAD_IDLE_MINUTES` | Continue mention threads within this window (default `30`) | No |
 | `MAX_THREAD_TURNS` | Max turns loaded per thread (default `20`) | No |

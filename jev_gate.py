@@ -1,10 +1,16 @@
-"""Jev input gate: allow or reject user text before the reply model runs."""
+"""Jev input gate via OpenRouter: allow or reject before the reply model runs."""
 
 from typesafe_sdk import Noul, NoulCriteria, TypeSafeClient
 
-from config import GATE_REJECT_REPLY, JEV_REJECT_THRESHOLD, TYPESAFE_API_KEY, logger
+from config import (
+    GATE_REJECT_REPLY,
+    JEV_API_KEY,
+    JEV_BASE_URL,
+    JEV_MODEL,
+    JEV_REJECT_THRESHOLD,
+    logger,
+)
 
-# Re-export for handlers
 __all__ = ["allow_user_text", "GATE_REJECT_REPLY"]
 
 
@@ -18,12 +24,18 @@ def allow_user_text(text: str) -> bool:
     if not text or not text.strip():
         return False
 
-    if not TYPESAFE_API_KEY:
-        logger.error("TYPESAFE_API_KEY is not set; refusing open chat input")
+    if not JEV_API_KEY:
+        logger.error(
+            "No OpenRouter key for Jev (OPENROUTER_API_KEY or API_KEY); refusing input"
+        )
         return False
 
     try:
-        with TypeSafeClient(api_key=TYPESAFE_API_KEY) as client:
+        with TypeSafeClient(
+            api_key=JEV_API_KEY,
+            base_url=JEV_BASE_URL,
+            model=JEV_MODEL,
+        ) as client:
             result = client.system_one(
                 state=text.strip(),
                 questions={
@@ -47,7 +59,8 @@ def allow_user_text(text: str) -> bool:
         p = float(result.nouls["reject"].noul)
         allowed = p < JEV_REJECT_THRESHOLD
         logger.info(
-            f"Jev gate noul={p:.4f} threshold={JEV_REJECT_THRESHOLD} allowed={allowed}"
+            f"Jev gate (OpenRouter model={JEV_MODEL}) noul={p:.4f} "
+            f"threshold={JEV_REJECT_THRESHOLD} allowed={allowed}"
         )
         return allowed
     except Exception as e:
