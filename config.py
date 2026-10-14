@@ -740,7 +740,7 @@ DB_URL = os.getenv("DATABASE_URL", config("DATABASE_URL"))
 
 # Jev input gate via OpenRouter (fail closed when key missing or call fails)
 # Prefer OPENROUTER_API_KEY; fall back to API_KEY (same OpenRouter key as chat).
-JEV_API_KEY = config("OPENROUTER_API_KEY", default="") or config("API_KEY", default="")
+JEV_API_KEY = config("OPENROUTER_API_KEY", default="") or API_KEY
 JEV_BASE_URL = config("JEV_BASE_URL", default="https://openrouter.ai/api")
 JEV_MODEL = config("JEV_MODEL", default="jev-1.13")
 JEV_REJECT_THRESHOLD = float(config("JEV_REJECT_THRESHOLD", default="0.8"))
