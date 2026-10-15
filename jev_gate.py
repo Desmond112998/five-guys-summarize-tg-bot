@@ -11,17 +11,31 @@ from config import (
     logger,
 )
 
-__all__ = ["allow_user_text", "GATE_REJECT_REPLY"]
+__all__ = [
+    "allow_user_text",
+    "allow_user_turn",
+    "previous_assistant_from_history",
+    "GATE_REJECT_REPLY",
+]
 
 
-def allow_user_text(text: str) -> bool:
-    """
-    Return True if the text may proceed to the reply model.
+def previous_assistant_from_history(history: list) -> str | None:
+    """Last assistant message in thread history, if any."""
+    for msg in reversed(history):
+        if msg.get("role") == "assistant":
+            content = msg.get("content")
+            return content if content else ""
+    return None
 
-    Fail closed: missing API key, timeout, or any error => False.
-    Jev noul is P(reject); values at or above JEV_REJECT_THRESHOLD are blocked.
-    """
-    if not text or not text.strip():
+
+def _format_gate_state(user_text: str, previous_assistant: str | None) -> str:
+    prev = (previous_assistant or "").strip()
+    user = user_text.strip()
+    return f"previous_assistant: {prev}\nuser: {user}"
+
+
+def _run_jev_gate(state: str) -> bool:
+    if not state.strip():
         return False
 
     if not JEV_API_KEY:
@@ -37,7 +51,7 @@ def allow_user_text(text: str) -> bool:
             model=JEV_MODEL,
         ) as client:
             result = client.system_one(
-                state=text.strip(),
+                state=state,
                 questions={
                     "reject": Noul(
                         instructions=(
@@ -66,3 +80,21 @@ def allow_user_text(text: str) -> bool:
     except Exception as e:
         logger.error(f"Jev gate failed closed: {e}")
         return False
+
+
+def allow_user_turn(user_text: str, previous_assistant: str | None = None) -> bool:
+    """
+    Return True if the user turn may proceed to the reply model.
+
+    Jev sees the current user text and the previous assistant reply only.
+    Fail closed: missing API key, timeout, or any error => False.
+    """
+    if not user_text or not user_text.strip():
+        return False
+    state = _format_gate_state(user_text, previous_assistant)
+    return _run_jev_gate(state)
+
+
+def allow_user_text(text: str) -> bool:
+    """Gate a single string (e.g. a search query) with no prior assistant context."""
+    return allow_user_turn(text, previous_assistant=None)

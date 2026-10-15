@@ -12,7 +12,7 @@ from database import (
     log_message,
     resolve_thread_id,
 )
-from jev_gate import allow_user_text
+from jev_gate import allow_user_turn, previous_assistant_from_history
 
 
 async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -44,21 +44,6 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not user_text:
         return
 
-    if not allow_user_text(user_text):
-        await message.reply_text(
-            GATE_REJECT_REPLY,
-            reply_to_message_id=message.message_id,
-        )
-        return
-
-    can_use, current_usage = check_daily_usage_limit(message.chat_id, max_usage=20)
-    if not can_use:
-        await message.reply_text(
-            f"今日已經用咗 {current_usage} 次喇 Ching！😅 聽日再搵我傾偈啦～",
-            reply_to_message_id=message.message_id,
-        )
-        return
-
     logger.info(
         f"Bot is mentioned or replied to in chat {message.chat_id}. Triggering AI response."
     )
@@ -78,6 +63,22 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     history = get_thread_messages(message.chat_id, thread_id)
     if history is None:
         await message.reply_text("哎呀，讀取對話紀錄時出錯！🤯")
+        return
+
+    previous_assistant = previous_assistant_from_history(history)
+    if not allow_user_turn(user_text, previous_assistant):
+        await message.reply_text(
+            GATE_REJECT_REPLY,
+            reply_to_message_id=message.message_id,
+        )
+        return
+
+    can_use, current_usage = check_daily_usage_limit(message.chat_id, max_usage=20)
+    if not can_use:
+        await message.reply_text(
+            f"今日已經用咗 {current_usage} 次喇 Ching！😅 聽日再搵我傾偈啦～",
+            reply_to_message_id=message.message_id,
+        )
         return
 
     if not history or history[-1]["role"] != "user":
